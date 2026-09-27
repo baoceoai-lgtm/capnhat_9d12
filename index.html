@@ -1,1 +1,243 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xác Nhận Nộp Tiền</title>
+  
+  <!-- Thư viện SheetJS chuyên xuất file Excel (.xlsx) chuẩn -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #f4f6f8; margin: 0; padding: 15px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 480px; background: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    h2 { text-align: center; color: #1a73e8; margin-top: 0; margin-bottom: 20px; font-size: 20px; }
+    .form-group { margin-bottom: 15px; }
+    label { font-weight: 600; font-size: 14px; color: #333; display: block; margin-bottom: 6px; }
+    input { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; outline: none; }
+    input:focus { border-color: #1a73e8; }
+    
+    .btn-submit { width: 100%; background-color: #1a73e8; color: white; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; margin-top: 5px; }
+    .btn-submit:disabled { background-color: #a0c3ff; }
+
+    /* Khung thông báo tùy chỉnh không hiện tên miền trình duyệt */
+    .alert-box {
+      display: none;
+      margin-top: 15px;
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 15px;
+    }
+    .alert-success { background-color: #e6f4ea; color: #137333; border: 1px solid #ceedd3; }
+    .alert-error { background-color: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; }
+
+    /* Tiêu đề danh sách & Nút xuất Excel */
+    .history-header { margin-top: 30px; border-bottom: 2px solid #1a73e8; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    .history-title { font-size: 15px; color: #1a73e8; font-weight: bold; }
+    
+    .btn-excel { background-color: #107c41; color: white; border: none; padding: 7px 12px; border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+    .btn-excel:hover { background-color: #0b582e; }
+
+    /* Danh sách người đã nộp tiền */
+    .item { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 12px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .item-name { font-weight: bold; color: #202124; font-size: 15px; }
+    .item-time { font-size: 12px; color: #70757a; margin-top: 3px; }
+    .item-amount { font-weight: bold; color: #188038; font-size: 15px; }
+    .empty-msg { text-align: center; color: #70757a; margin-top: 15px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>XÁC NHẬN NỘP TIỀN</h2>
+    
+    <!-- Form nhập dữ liệu -->
+    <div class="form-group">
+      <label>Họ và Tên học sinh (*)</label>
+      <input type="text" id="hoTen" placeholder="Nhập họ và tên của học sinh">
+    </div>
+    
+    <div class="form-group">
+      <label>Số tiền (VNĐ) (*)</label>
+      <input type="number" id="soTien" placeholder="Ví dụ: 100000">
+    </div>
+    
+    <div class="form-group">
+      <label>Ghi chú (có thể không nhập) </label>
+      <input type="text" id="ghiChu" placeholder="Tên người chuyển tiền / STK...">
+    </div>
+    
+    <button id="btnSubmit" class="btn-submit" onclick="guiThongTin()">Xác nhận Nộp tiền</button>
+
+    <!-- Khung thông báo ngắn gọn -->
+    <div id="thongBao" class="alert-box"></div>
+
+    <!-- Tiêu đề danh sách + Nút xuất file Excel -->
+    <div class="history-header">
+      <span class="history-title">Danh sách đã nộp</span>
+      <button class="btn-excel" onclick="xuatFileExcel()">📊 Xuất Excel</button>
+    </div>
+    
+    <!-- Nơi hiển thị danh sách -->
+    <div id="danhSach">Đang tải danh sách...</div>
+  </div>
+
+  <script>
+    const FIREBASE_URL = "https://xdkiot-default-rtdb.firebaseio.com/nop_tien_9D12";
+    let duLieuGoc = null; // Lưu lại dữ liệu để xuất Excel
+
+    // 1. Hàm hiển thị thông báo đẹp ngắn gọn
+    function hienThongBao(noiDung, laThanhCong) {
+      const box = document.getElementById('thongBao');
+      box.innerText = noiDung;
+      box.className = 'alert-box ' + (laThanhCong ? 'alert-success' : 'alert-error');
+      box.style.display = 'block';
+
+      setTimeout(() => {
+        box.style.display = 'none';
+      }, 4000);
+    }
+
+    // 2. Hàm tải danh sách phía dưới từ Firebase
+    async function taiDanhSach() {
+      try {
+        const response = await fetch(`${FIREBASE_URL}.json`);
+        const data = await response.json();
+        duLieuGoc = data; // Lưu dữ liệu vào biến toàn cục
+
+        const danhSachContainer = document.getElementById('danhSach');
+
+        if (!data) {
+          danhSachContainer.innerHTML = '<div class="empty-msg">Chưa có ai nộp tiền.</div>';
+          return;
+        }
+
+        // Đưa người nộp mới nhất lên đầu
+        const items = Object.values(data).reverse();
+
+        let html = '';
+        items.forEach(item => {
+          const soTienDinhDang = Number(item.soTien).toLocaleString('vi-VN') + ' đ';
+          html += `
+            <div class="item">
+              <div>
+                <div class="item-name">${escapeHtml(item.hoTen)}</div>
+                <div class="item-time">${escapeHtml(item.thoiGian)}${item.ghiChu ? ' - ' + escapeHtml(item.ghiChu) : ''}</div>
+              </div>
+              <div class="item-amount">${soTienDinhDang}</div>
+            </div>
+          `;
+        });
+
+        danhSachContainer.innerHTML = html;
+      } catch (error) {
+        console.error("Lỗi tải danh sách:", error);
+      }
+    }
+
+    // 3. Hàm gửi dữ liệu lên Firebase
+    async function guiThongTin() {
+      const hoTen = document.getElementById('hoTen').value.trim();
+      const soTien = document.getElementById('soTien').value.trim();
+      const ghiChu = document.getElementById('ghiChu').value.trim();
+
+      if (!hoTen || !soTien) {
+        hienThongBao("Vui lòng nhập Họ tên và Số tiền!", false);
+        return;
+      }
+
+      const btn = document.getElementById('btnSubmit');
+      btn.disabled = true;
+      btn.innerText = "Đang gửi...";
+
+      const data = {
+        hoTen: hoTen,
+        soTien: Number(soTien),
+        ghiChu: ghiChu,
+        thoiGian: new Date().toLocaleString('vi-VN')
+      };
+
+      try {
+        await fetch(`${FIREBASE_URL}.json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        document.getElementById('hoTen').value = '';
+        document.getElementById('soTien').value = '';
+        document.getElementById('ghiChu').value = '';
+        
+        hienThongBao("Gửi thông tin thành công!", true);
+        taiDanhSach();
+      } catch (error) {
+        hienThongBao("Có lỗi xảy ra, vui lòng thử lại!", false);
+        console.error(error);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "Xác nhận Nộp tiền";
+      }
+    }
+
+    // 4. CHỨC NĂNG MỚI: Xuất danh sách ra file Excel (.xlsx)
+    function xuatFileExcel() {
+      if (!duLieuGoc || Object.keys(duLieuGoc).length === 0) {
+        hienThongBao("Chưa có dữ liệu để xuất file Excel!", false);
+        return;
+      }
+
+      // Chuẩn bị dữ liệu dạng bảng cho Excel
+      const bangDuLieu = [];
+      let stt = 1;
+
+      Object.values(duLieuGoc).forEach(item => {
+        bangDuLieu.push({
+          "STT": stt++,
+          "Họ và Tên": item.hoTen || '',
+          "Số Tiền (VNĐ)": item.soTien || 0,
+          "Thời Gian Nộp": item.thoiGian || '',
+          "Ghi Chú": item.ghiChu || ''
+        });
+      });
+
+      // Tạo workbook và sheet từ dữ liệu
+      const worksheet = XLSX.utils.json_to_sheet(bangDuLieu);
+      
+      // Chỉnh độ rộng các cột tự động cho đẹp
+      worksheet['!cols'] = [
+        { wch: 6 },  // STT
+        { wch: 22 }, // Họ tên
+        { wch: 15 }, // Số tiền
+        { wch: 22 }, // Thời gian
+        { wch: 25 }  // Ghi chú
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "DanhSachNopTien");
+
+      // Xuất file .xlsx về máy
+      const tenFile = `Danh_Sach_Nop_Tien_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(workbook, tenFile);
+    }
+
+    // Lọc ký tự đặc biệt
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    // Tự động tải danh sách khi mở trang và làm mới mỗi 3 giây
+    window.onload = function() {
+      taiDanhSach();
+      setInterval(taiDanhSach, 3000);
+    };
+  </script>
+</body>
+</html>
